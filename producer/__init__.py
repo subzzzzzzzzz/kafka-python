@@ -1,0 +1,1 @@
+"""Local Kafka producer package."""

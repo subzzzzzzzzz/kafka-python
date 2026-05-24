@@ -1,113 +1,65 @@
-"""Configuration helpers for Databricks + Confluent Cloud Kafka."""
+"""Local configuration for the aviation Kafka streaming pipeline."""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = PROJECT_ROOT / "data"
+OUTPUT_DIR = PROJECT_ROOT / "output"
+LOG_DIR = PROJECT_ROOT / "logs"
 
-DEFAULT_DBFS_BASE = "dbfs:/FileStore/aviation-pipeline"
-DEFAULT_LOCAL_DBFS_BASE = "/dbfs/FileStore/aviation-pipeline"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "aviation-reviews")
+KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "aviation-review-local-consumer")
 
+PRODUCER_DELAY_SECONDS = float(os.getenv("PRODUCER_DELAY_SECONDS", "1.0"))
+PRODUCER_RETRIES = int(os.getenv("PRODUCER_RETRIES", "3"))
+PRODUCER_RETRY_BACKOFF_SECONDS = float(os.getenv("PRODUCER_RETRY_BACKOFF_SECONDS", "0.5"))
+PRODUCER_SEND_TIMEOUT_SECONDS = float(os.getenv("PRODUCER_SEND_TIMEOUT_SECONDS", "30"))
 
-def env(name: str, default: str | None = None, required: bool = False) -> str | None:
-    value = os.getenv(name, default)
-    if required and not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
-
-
-@dataclass(frozen=True)
-class ConfluentKafkaConfig:
-    bootstrap_servers: str
-    topic: str
-    api_key: str
-    api_secret: str
-    security_protocol: str = "SASL_SSL"
-    sasl_mechanism: str = "PLAIN"
-    client_id: str = "aviation-databricks-pipeline"
-
-    @classmethod
-    def from_env(cls) -> "ConfluentKafkaConfig":
-        return cls(
-            bootstrap_servers=env("CONFLUENT_BOOTSTRAP_SERVERS", required=True) or "",
-            topic=env("CONFLUENT_TOPIC", "aviation-reviews") or "aviation-reviews",
-            api_key=env("CONFLUENT_API_KEY", required=True) or "",
-            api_secret=env("CONFLUENT_API_SECRET", required=True) or "",
-            security_protocol=env("CONFLUENT_SECURITY_PROTOCOL", "SASL_SSL") or "SASL_SSL",
-            sasl_mechanism=env("CONFLUENT_SASL_MECHANISM", "PLAIN") or "PLAIN",
-            client_id=env("CONFLUENT_CLIENT_ID", "aviation-databricks-pipeline")
-            or "aviation-databricks-pipeline",
-        )
-
-    def kafka_python_producer_options(self) -> dict[str, Any]:
-        return {
-            "bootstrap_servers": self.bootstrap_servers,
-            "security_protocol": self.security_protocol,
-            "sasl_mechanism": self.sasl_mechanism,
-            "sasl_plain_username": self.api_key,
-            "sasl_plain_password": self.api_secret,
-            "client_id": self.client_id,
-            "acks": "all",
-            "retries": 0,
-            "max_in_flight_requests_per_connection": 1,
-        }
-
-    def spark_read_options(self) -> dict[str, str]:
-        jaas = (
-            "org.apache.kafka.common.security.plain.PlainLoginModule required "
-            f'username="{self.api_key}" password="{self.api_secret}";'
-        )
-        return {
-            "kafka.bootstrap.servers": self.bootstrap_servers,
-            "subscribe": self.topic,
-            "startingOffsets": env("KAFKA_STARTING_OFFSETS", "earliest") or "earliest",
-            "kafka.security.protocol": self.security_protocol,
-            "kafka.sasl.mechanism": self.sasl_mechanism,
-            "kafka.sasl.jaas.config": jaas,
-            "failOnDataLoss": "false",
-        }
-
-
-@dataclass(frozen=True)
-class PipelinePaths:
-    dbfs_base: str = DEFAULT_DBFS_BASE
-    local_dbfs_base: str = DEFAULT_LOCAL_DBFS_BASE
-    local_data_dir: Path = LOCAL_DATA_DIR
-
-    @classmethod
-    def from_env(cls) -> "PipelinePaths":
-        dbfs_base = env("AVIATION_DBFS_BASE", DEFAULT_DBFS_BASE) or DEFAULT_DBFS_BASE
-        local_dbfs_base = dbfs_base.replace("dbfs:", "/dbfs", 1)
-        return cls(dbfs_base=dbfs_base, local_dbfs_base=local_dbfs_base)
-
-    @property
-    def checkpoint_base(self) -> str:
-        return f"{self.dbfs_base}/checkpoints"
-
-    @property
-    def delta_base(self) -> str:
-        return f"{self.dbfs_base}/delta"
-
-    @property
-    def csv_output_base(self) -> str:
-        return f"{self.dbfs_base}/csv"
-
-    @property
-    def local_log_dir(self) -> Path:
-        return Path(self.local_dbfs_base) / "logs"
-
+CONSUMER_POLL_TIMEOUT_MS = int(os.getenv("CONSUMER_POLL_TIMEOUT_MS", "1000"))
+CONSUMER_MAX_RECORDS = int(os.getenv("CONSUMER_MAX_RECORDS", "0"))
+LOW_RATING_THRESHOLD = float(os.getenv("LOW_RATING_THRESHOLD", "5.0"))
 
 SOURCE_DATASETS = {
-    "airline": "airlines.csv",
-    "airport": "airports.csv",
-    "lounge": "lounges.csv",
-    "seat": "seats.csv",
+    "airline": DATA_DIR / "airlines.csv",
+    "airport": DATA_DIR / "airports.csv",
+    "lounge": DATA_DIR / "lounges.csv",
+    "seat": DATA_DIR / "seats.csv",
+}
+
+OUTPUT_FILES = {
+    "all_reviews": OUTPUT_DIR / "all_aviation_reviews.csv",
+    "airline": OUTPUT_DIR / "airline_reviews.csv",
+    "airport": OUTPUT_DIR / "airport_reviews.csv",
+    "lounge": OUTPUT_DIR / "lounge_reviews.csv",
+    "seat": OUTPUT_DIR / "seat_reviews.csv",
+    "low_rated": OUTPUT_DIR / "low_rated_reviews.csv",
+    "negative": OUTPUT_DIR / "negative_reviews.csv",
+    "analytics_summary": OUTPUT_DIR / "analytics_summary.csv",
 }
 
 NEGATIVE_KEYWORDS = ("delay", "cancelled", "rude", "dirty", "lost", "worst")
+
+MESSAGE_FIELDS = [
+    "source_category",
+    "review_id",
+    "event_time",
+    "author",
+    "country",
+    "rating",
+    "review",
+    "recommended",
+    "airline",
+    "airport",
+    "lounge",
+    "seat",
+]
+
+
+def ensure_directories() -> None:
+    for directory in (DATA_DIR, OUTPUT_DIR, LOG_DIR):
+        directory.mkdir(parents=True, exist_ok=True)

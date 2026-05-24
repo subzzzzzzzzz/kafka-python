@@ -1,29 +1,37 @@
-# Benchmark Results
+# Local Benchmark Results
 
-Run `notebooks/benchmark_notebook.py` in Databricks after configuring Confluent Cloud credentials.
+Run benchmarks from the project root.
+
+Dry run without Kafka:
+
+```powershell
+python analytics\benchmark.py --dry-run --delay 0
+```
+
+Kafka producer benchmark:
+
+```powershell
+python analytics\benchmark.py --delay 0
+```
 
 ## Metrics Captured
 
-| Metric | Description |
+| Metric | Meaning |
 | --- | --- |
-| records_sent | Number of normalized records sent to Confluent Cloud Kafka |
-| elapsed_seconds | Wall-clock producer benchmark time |
-| messages_per_second | Producer send throughput |
-| spark.streams.active | Active Structured Streaming query progress |
+| max_records | Maximum records attempted |
+| delay_seconds | Artificial delay between messages |
+| dry_run | Whether Kafka was bypassed |
+| elapsed_seconds | Total wall-clock time |
+| messages_per_second | Producer throughput |
 
-## Example Output
+## Example
 
 ```json
 {
-  "records_sent": 100,
-  "elapsed_seconds": 4.82,
-  "messages_per_second": 20.75,
-  "topic": "aviation-reviews"
+  "max_records": 100,
+  "delay_seconds": 0.0,
+  "dry_run": true,
+  "elapsed_seconds": 0.12,
+  "messages_per_second": 66.7
 }
 ```
-
-## Bottleneck Analysis
-
-- Producer throughput depends mainly on Confluent Cloud network latency, `linger_ms`, batch size, and acknowledgements.
-- Consumer throughput depends on Spark micro-batch scheduling, Kafka source offsets, checkpoint storage, and sink type.
-- Memory sinks are useful for demonstrations; Delta sinks are better for durable analytics.

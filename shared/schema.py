@@ -1,4 +1,4 @@
-"""Aviation review schemas for producer normalization and Spark parsing."""
+"""Schema normalization for local aviation review CSV datasets."""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-
-from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
 
 FIELD_ALIASES = {
@@ -24,39 +22,24 @@ FIELD_ALIASES = {
     "seat": ("seat", "seat_name"),
 }
 
-
-AVIATION_REVIEW_SCHEMA = StructType(
-    [
-        StructField("source_category", StringType(), False),
-        StructField("review_id", StringType(), False),
-        StructField("event_time", StringType(), False),
-        StructField("author", StringType(), True),
-        StructField("country", StringType(), True),
-        StructField("rating", DoubleType(), True),
-        StructField("review", StringType(), True),
-        StructField("recommended", StringType(), True),
-        StructField("airline", StringType(), True),
-        StructField("airport", StringType(), True),
-        StructField("lounge", StringType(), True),
-        StructField("seat", StringType(), True),
-    ]
-)
+VALID_CATEGORIES = {"airline", "airport", "lounge", "seat"}
 
 
 def normalize_record(source_category: str, row: dict[str, Any], row_number: int) -> dict[str, Any]:
     category = source_category.strip().lower()
+    if category not in VALID_CATEGORIES:
+        raise ValueError(f"Unsupported source_category: {source_category}")
+
     rating = _rating(_first(row, FIELD_ALIASES["rating"]))
     review = _text(_first(row, FIELD_ALIASES["review"]))
-
     if rating is None:
         raise ValueError("rating is required")
     if not review:
         raise ValueError("review text is required")
 
-    record = {
+    return {
         "source_category": category,
-        "review_id": _text(_first(row, FIELD_ALIASES["review_id"]))
-        or _stable_id(category, row, row_number),
+        "review_id": _text(_first(row, FIELD_ALIASES["review_id"])) or _stable_id(category, row, row_number),
         "event_time": _event_time(_first(row, FIELD_ALIASES["event_time"])),
         "author": _text(_first(row, FIELD_ALIASES["author"])) or "unknown",
         "country": _nullable(_first(row, FIELD_ALIASES["country"])),
@@ -68,7 +51,21 @@ def normalize_record(source_category: str, row: dict[str, Any], row_number: int)
         "lounge": _entity_value(category, "lounge", row),
         "seat": _entity_value(category, "seat", row),
     }
-    return record
+
+
+def validate_message(message: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for field in ("source_category", "review_id", "event_time", "rating", "review"):
+        if message.get(field) in (None, ""):
+            errors.append(f"{field} is required")
+    if message.get("source_category") not in VALID_CATEGORIES:
+        errors.append("source_category is invalid")
+    rating = message.get("rating")
+    if not isinstance(rating, (int, float)):
+        errors.append("rating must be numeric")
+    elif rating < 0 or rating > 10:
+        errors.append("rating must be between 0 and 10")
+    return errors
 
 
 def _first(row: dict[str, Any], aliases: tuple[str, ...]) -> Any:
@@ -82,7 +79,8 @@ def _first(row: dict[str, Any], aliases: tuple[str, ...]) -> Any:
 def _text(value: Any) -> str:
     if value is None:
         return ""
-    return str(value).strip()
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "null"} else text
 
 
 def _nullable(value: Any) -> str | None:
@@ -130,7 +128,7 @@ def _event_time(value: Any) -> str:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed.isoformat()
         except ValueError:
-            pass
+            continue
     parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
