@@ -1,0 +1,3 @@
+record_id,timestamp,user,author_country,stars,text,recommend,seat_name
+s1,2026-01-16T10:30:00Z,Mei Chen,Singapore,6.0,Seat pitch was acceptable on a short route,yes,Economy 17A
+s2,2026-01-17T11:00:00Z,Alex Kim,South Korea,3.0,Worst recline and rude cabin response,no,Premium 2C

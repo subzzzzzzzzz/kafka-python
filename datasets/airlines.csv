@@ -1,0 +1,3 @@
+review_id,date,author,country,rating,review,recommended,airline_name
+a1,2026-01-10,Asha Rao,India,8.0,On time crew and clean cabin,yes,SkyJet
+a2,2026-01-11,Mark Lee,United States,2.0,Worst delay and rude desk staff,no,SkyJet
