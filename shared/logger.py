@@ -1,4 +1,4 @@
-"""Structured logging configuration."""
+"""Structured JSON logging for Databricks notebooks."""
 
 from __future__ import annotations
 
@@ -6,14 +6,11 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
-
-from config import ERROR_LOG_PATH
 
 
 class JsonFormatter(logging.Formatter):
-    """Render log records as one JSON object per line."""
-
     RESERVED = {
         "args",
         "asctime",
@@ -47,36 +44,31 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-
         for key, value in record.__dict__.items():
             if key not in self.RESERVED and not key.startswith("_"):
                 payload[key] = value
-
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-
         return json.dumps(payload, default=str, sort_keys=True)
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    """Configure stdout logs and centralized error logs."""
-    root = logging.getLogger()
-    root.setLevel(level)
-    root.handlers.clear()
+def configure_logger(name: str, log_file: Path | None = None, level: int = logging.INFO) -> logging.Logger:
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.handlers.clear()
+    logger.propagate = False
 
     formatter = JsonFormatter()
-
     stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(level)
     stream_handler.setFormatter(formatter)
+    stream_handler.setLevel(level)
+    logger.addHandler(stream_handler)
 
-    error_handler = logging.FileHandler(ERROR_LOG_PATH, mode="a", encoding="utf-8")
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(formatter)
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(level)
+        logger.addHandler(file_handler)
 
-    root.addHandler(stream_handler)
-    root.addHandler(error_handler)
-
-
-def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(name)
+    return logger

@@ -1,201 +1,300 @@
-# Real-Time Aviation Review Streaming Pipeline
+# Real-Time Aviation Review Streaming Analytics Pipeline
 
-Production-style Kafka pipeline in Python that normalizes aviation review CSVs, streams them to Kafka, consumes them with manual offset commits, writes routed CSV outputs, and maintains rolling in-memory analytics.
+Built a real-time aviation review streaming analytics pipeline using Databricks, Apache Kafka, Confluent Cloud, PySpark Structured Streaming, and Python.
 
-## Architecture
+## Target Architecture
+
+```text
+CSV Files
+  -> Databricks Producer Notebook
+  -> Confluent Cloud Kafka Topic
+  -> Databricks Streaming Consumer Notebook
+  -> PySpark Structured Streaming Analytics
+  -> Delta Tables / Memory Tables / CSV Outputs
+```
 
 ![Architecture](docs/architecture.png)
 
-```text
-CSV Sources
-  -> producer.py
-  -> Kafka topic: aviation-reviews
-  -> consumer.py
-  -> router.py + file_writer.py + analytics.py
-  -> category/country/filter/full-dump CSV outputs + error.log
-```
+Kafka remains the central streaming backbone. Databricks is used for both producing test streams and consuming/analyzing the stream with Spark Structured Streaming.
 
-## Folder Structure
+## Project Structure
 
 ```text
-project-root/
-├── producer.py
-├── consumer.py
-├── config.py
-├── schema.py
-├── validator.py
-├── analytics.py
-├── router.py
-├── logger_config.py
-├── file_writer.py
-├── benchmark.py
-├── requirements.txt
-├── README.md
-├── error.log
-├── datasets/
+aviation-pipeline/
+├── notebooks/
+│   ├── producer_notebook.py
+│   ├── consumer_notebook.py
+│   └── benchmark_notebook.py
+├── shared/
+│   ├── config.py
+│   ├── logger.py
+│   └── schema.py
+├── data/
+│   ├── airlines.csv
+│   ├── airports.csv
+│   ├── lounges.csv
+│   └── seats.csv
 ├── output/
-│   ├── category/
-│   ├── country/
-│   ├── filtered/
-│   └── rotated/
-└── docs/
+├── logs/
+├── docs/
+│   ├── architecture.png
+│   └── benchmark_results.md
+├── requirements.txt
+├── .env.example
+└── README.md
 ```
 
-## Environment Setup
+## What The Pipeline Does
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+The producer notebook reads aviation review CSV files from `data/`, normalizes different CSV layouts into a common JSON event, and sends each event to Confluent Cloud Kafka with a configurable delay to simulate real-time ingestion.
+
+The consumer notebook uses:
+
+```python
+spark.readStream.format("kafka")
 ```
 
-The project uses only Python standard library modules plus `kafka-python`.
+It reads Kafka messages, casts `value` to string, parses JSON with a `StructType`, and creates structured streaming DataFrames for analytics and routing.
 
-## Kafka Setup
+## Confluent Cloud Setup
 
-Start Kafka locally, then create the topic with 4 partitions and 24-hour retention:
+Create a Confluent Cloud Kafka cluster and topic:
 
-```bash
-kafka-topics --bootstrap-server localhost:9092 --create --topic aviation-reviews --partitions 4 --replication-factor 1 --config retention.ms=86400000
-kafka-topics --bootstrap-server localhost:9092 --describe --topic aviation-reviews
+```text
+Topic: aviation-reviews
+Partitions: 4
+Retention: 24 hours
 ```
 
-Configuration is controlled with environment variables such as:
+Create a Confluent Cloud API key and secret for the cluster.
 
-```bash
-set KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-set KAFKA_TOPIC=aviation-reviews
-set PRODUCER_BATCH_SIZE=16384
-set PRODUCER_LINGER_MS=10
-set CONSUMER_MAX_POLL_RECORDS=100
+You need:
+
+```text
+Bootstrap server
+API key
+API secret
+Topic name
 ```
 
-## Run Producer
+The code connects with:
 
-Validate CSVs without Kafka:
-
-```bash
-python producer.py --dry-run
+```python
+security_protocol = "SASL_SSL"
+sasl_mechanism = "PLAIN"
 ```
 
-Send normalized messages to Kafka:
+## Databricks Setup
 
-```bash
-python producer.py
+Use Databricks Repos or upload this project folder into a Databricks workspace.
+
+Attach the notebooks to a Databricks cluster with PySpark support.
+
+Install Python dependencies:
+
+```python
+%pip install -r ../requirements.txt
 ```
 
-Producer guarantees:
+Restart Python if Databricks asks you to.
 
-- Reads `datasets/airlines.csv`, `airports.csv`, `lounges.csv`, and `seats.csv`
-- Normalizes rows into the common JSON envelope
-- Logs invalid rows to `error.log`
-- Uses bounded exponential retries for Kafka sends
-- Uses deterministic keys: `<source_category>:<record_id>`
+If your Databricks runtime does not already include the Spark Kafka connector, attach this Maven library to the cluster:
 
-## Run Consumer
-
-```bash
-python consumer.py
+```text
+org.apache.spark:spark-sql-kafka-0-10_2.12:<your-spark-version>
 ```
 
-For a bounded local test:
+Most modern Databricks runtimes include Kafka support, but this is the first thing to check if `format("kafka")` is not found.
 
-```bash
-python consumer.py --max-messages 8
+## Configure Secrets
+
+Recommended: store Confluent credentials in Databricks Secrets.
+
+Example secret scope:
+
+```text
+Scope: aviation-kafka
+Keys:
+  api-key
+  api-secret
 ```
 
-Consumer guarantees:
+In Databricks, set environment variables before running notebooks. You can do this in a notebook cell:
 
-- `enable_auto_commit=False`
-- Manual offset commit only after processing succeeds
-- Malformed JSON/schema failures are logged and committed as handled poison messages
-- File write failures are retried before the message is allowed to fail
-- Analytics are updated incrementally in memory
+```python
+import os
 
-## Expected Outputs
+os.environ["CONFLUENT_BOOTSTRAP_SERVERS"] = "pkc-xxxxx.region.provider.confluent.cloud:9092"
+os.environ["CONFLUENT_TOPIC"] = "aviation-reviews"
+os.environ["CONFLUENT_API_KEY"] = dbutils.secrets.get("aviation-kafka", "api-key")
+os.environ["CONFLUENT_API_SECRET"] = dbutils.secrets.get("aviation-kafka", "api-secret")
+os.environ["CONFLUENT_SECURITY_PROTOCOL"] = "SASL_SSL"
+os.environ["CONFLUENT_SASL_MECHANISM"] = "PLAIN"
+os.environ["AVIATION_DBFS_BASE"] = "dbfs:/FileStore/aviation-pipeline"
+```
 
-Category routing:
+Do not hard-code API secrets in committed files.
 
-- `output/category/airline_reviews.csv`
-- `output/category/airport_reviews.csv`
-- `output/category/lounge_reviews.csv`
-- `output/category/seat_reviews.csv`
+## Run Order
 
-Filtering:
+Run in this order:
 
-- `output/filtered/negative_signals.csv`
-- `output/filtered/low_rated_reviews.csv`
+1. Create Confluent Cloud Kafka topic.
+2. Open `notebooks/consumer_notebook.py` in Databricks and run it.
+3. Open `notebooks/producer_notebook.py` in Databricks and run it.
+4. Watch streaming memory tables and output paths update.
+5. Run `notebooks/benchmark_notebook.py` for throughput measurements.
 
-Country routing:
+## Producer Notebook
 
-- `output/country/country_<country>.csv`
-- `output/country/unattributed_reviews.csv`
+File:
 
-Full dump:
+```text
+notebooks/producer_notebook.py
+```
 
-- `output/all_aviation_reviews.csv`
+Responsibilities:
 
-Files are append-safe, headers are validated, and active CSVs rotate after 5 MB using names such as `airline_reviews_1.csv`.
+- Read `data/airlines.csv`, `airports.csv`, `lounges.csv`, and `seats.csv`
+- Normalize heterogeneous CSV rows
+- Serialize each row as JSON
+- Send records to Confluent Cloud Kafka using `kafka-python`
+- Use retry handling around Kafka sends
+- Log send metadata including topic, partition, offset, and review ID
+- Measure producer throughput in messages/sec
 
-## Sample Structured Logs
+The producer simulates real-time ingestion using `producer_delay_seconds`.
+
+## Consumer Notebook
+
+File:
+
+```text
+notebooks/consumer_notebook.py
+```
+
+Core Kafka read:
+
+```python
+kafka_raw_df = (
+    spark.readStream.format("kafka")
+    .options(**kafka_config.spark_read_options())
+    .load()
+)
+```
+
+Parsing flow:
+
+```text
+Kafka stream
+  -> CAST(value AS STRING)
+  -> from_json(value, AVIATION_REVIEW_SCHEMA)
+  -> structured columns
+  -> streaming analytics and outputs
+```
+
+## Streaming Analytics
+
+Implemented analytics include:
+
+- Average rating per airline
+- Country-wise review counts
+- Category-wise review counts
+- Low-rated review filtering
+- Negative keyword filtering
+- Top airlines by rating
+- Malformed Kafka message capture
+
+Examples:
+
+```python
+avg_airline_ratings_df = (
+    reviews_df.filter(col("airline").isNotNull())
+    .groupBy("airline")
+    .agg(avg("rating").alias("average_rating"), count("*").alias("review_count"))
+)
+
+low_rated_reviews_df = reviews_df.filter(col("rating") < 5)
+
+country_counts_df = (
+    reviews_df.groupBy("country")
+    .agg(count("*").alias("review_count"))
+)
+```
+
+## Outputs
+
+The consumer writes to:
+
+```text
+dbfs:/FileStore/aviation-pipeline/delta/all_reviews
+dbfs:/FileStore/aviation-pipeline/delta/malformed_messages
+dbfs:/FileStore/aviation-pipeline/csv/low_rated_reviews
+dbfs:/FileStore/aviation-pipeline/csv/negative_reviews
+```
+
+It also creates memory tables:
+
+```text
+avg_airline_ratings
+country_review_counts
+category_review_counts
+top_airlines_by_rating
+```
+
+Inspect them in Databricks SQL cells:
+
+```sql
+SELECT * FROM avg_airline_ratings ORDER BY average_rating DESC;
+SELECT * FROM country_review_counts ORDER BY review_count DESC;
+SELECT * FROM category_review_counts ORDER BY review_count DESC;
+```
+
+## Logging
+
+Structured JSON logs are written to:
+
+```text
+dbfs:/FileStore/aviation-pipeline/logs
+```
+
+Examples:
 
 ```json
-{"level":"INFO","logger":"producer","message":"message_sent","record_id":"a1","source_category":"airline","topic":"aviation-reviews"}
-{"level":"ERROR","logger":"consumer","message":"corrupted_message_handled","offset":12,"partition":0,"topic":"aviation-reviews"}
-{"level":"INFO","logger":"consumer","message":"consumer_summary","processed_messages":8,"throughput_messages_per_second":42.7}
-```
-
-## Example Analytics Summary
-
-```json
-{
-  "total_messages_processed": 8,
-  "messages_per_category": {
-    "airline": 2,
-    "airport": 2,
-    "lounge": 2,
-    "seat": 2
-  },
-  "low_rated_review_count": 4,
-  "rating_distribution": {
-    "2": 2,
-    "3": 2,
-    "6": 1,
-    "7": 1,
-    "8": 1,
-    "9": 1
-  },
-  "top_5_airlines": [["SkyJet", 2]],
-  "top_5_airports": [["Madrid International", 1], ["North Hub", 1]]
-}
+{"level":"INFO","logger":"databricks_producer","message":"kafka_message_sent","topic":"aviation-reviews","partition":1,"offset":42,"review_id":"a1"}
+{"level":"INFO","logger":"databricks_streaming_consumer","message":"streaming_batch_processed","batch_id":3,"row_count":8}
 ```
 
 ## Benchmarking
 
-Local dry-run benchmark:
+Use:
 
-```bash
-python benchmark.py
+```text
+notebooks/benchmark_notebook.py
 ```
 
-Kafka producer benchmark:
+It measures:
 
-```bash
-python benchmark.py --use-kafka
-```
+- Records sent
+- Elapsed time
+- Producer messages/sec
+- Active streaming query progress
 
-Results are written to `docs/benchmark_results.md`. The benchmark matrix compares:
+## Why Localhost Kafka Is Not Used
 
-- Producer batch sizes
-- Producer linger times
-- Consumer `max_poll_records`
-- Serialization throughput
-- Producer throughput when Kafka mode is enabled
+Databricks cannot connect to Kafka running on your laptop as `localhost:9092`. Inside Databricks, `localhost` means the Databricks driver node, not your machine.
 
-## Troubleshooting
+That is why this project uses Confluent Cloud Kafka as the central broker.
 
-- `NoBrokersAvailable`: verify Kafka is running and `KAFKA_BOOTSTRAP_SERVERS` is correct.
-- Empty output files: confirm the consumer is running in the same topic and group expected by `config.py`.
-- Header mismatch errors: an existing output CSV has a different header; archive it or align the schema before appending.
-- Repeated processing after a crash: expected at-least-once behavior. The consumer commits offsets only after successful writes.
-- Invalid CSV rows: inspect `error.log` for structured validation errors.
+## Evaluator Summary
+
+This project implements a cloud-native streaming analytics system. A Databricks producer notebook reads aviation review CSV datasets and publishes normalized JSON events to Confluent Cloud Kafka using SASL_SSL authentication. A Databricks consumer notebook uses Spark Structured Streaming to consume the Kafka topic, parse JSON using a strict schema, perform real-time aggregations and filtering, and write outputs to Delta, CSV, and memory sinks.
+
+## Future Improvements
+
+- Add Delta Live Tables for managed streaming pipelines
+- Add schema evolution handling
+- Add data quality expectations
+- Add dashboarding over Delta output tables
+- Add CI checks for shared modules
+- Add automated Confluent topic provisioning
